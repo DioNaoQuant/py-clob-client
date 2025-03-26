@@ -2,6 +2,7 @@ from typing import Any
 from dataclasses import dataclass, asdict
 from json import dumps
 from typing import Literal, Optional
+from enum import Enum
 
 from .constants import ZERO_ADDRESS
 
@@ -174,7 +175,7 @@ class BalanceAllowanceParams:
     signature_type: int = -1
 
 
-class OrderType(enumerate):
+class OrderType(Enum):
     GTC = "GTC"
     FOK = "FOK"
     GTD = "GTD"
