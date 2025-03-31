@@ -1,5 +1,5 @@
 import hashlib
-
+from enum import Enum
 from .clob_types import OrderBookSummary, OrderSummary, TickSize
 
 
@@ -31,8 +31,13 @@ def generate_orderbook_summary_hash(orderbook: OrderBookSummary) -> str:
     return hash
 
 
+# #修改为允许枚举类型，防止类型警告
 def order_to_json(order, owner, orderType) -> dict:
-    return {"order": order.dict(), "owner": owner, "orderType": orderType}
+    return {
+        "order": order.dict(),
+        "owner": owner,
+        "orderType": orderType.value if isinstance(orderType, Enum) else orderType
+    }
 
 
 def is_tick_size_smaller(a: TickSize, b: TickSize) -> bool:
