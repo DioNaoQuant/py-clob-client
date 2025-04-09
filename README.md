@@ -11,7 +11,7 @@
 ```bash
 pip install git+https://github.com/Dionysos-o/py-clob-client.git@dev#egg=py_clob_client
 ```
-推荐安装在 Python 3.12环境下
+推荐安装在 Python 3.12环境下.
 
 
 **See [examples](examples/) for more.**
