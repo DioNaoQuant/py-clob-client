@@ -1,4 +1,6 @@
 import requests
+import aiohttp
+from typing import Dict, Any, Optional
 
 from py_clob_client.clob_types import (
     DropNotificationParams,
@@ -32,34 +34,37 @@ def overloadHeaders(method: str, headers: dict) -> dict:
     return headers
 
 
-def request(endpoint: str, method: str, headers=None, data=None):
+async def request(endpoint: str, method: str, headers=None, data=None):
     try:
         headers = overloadHeaders(method, headers)
-        resp = requests.request(
-            method=method, url=endpoint, headers=headers, json=data if data else None
-        )
-        if resp.status_code != 200:
-            raise PolyApiException(resp)
+        
+        # 使用aiohttp代替requests
+        async with aiohttp.ClientSession() as session:
+            async with session.request(
+                method=method, url=endpoint, headers=headers, json=data if data else None
+            ) as resp:
+                if resp.status != 200:
+                    raise PolyApiException(resp)
 
-        try:
-            return resp.json()
-        except requests.JSONDecodeError:
-            return resp.text
+                try:
+                    return await resp.json()
+                except:
+                    return await resp.text()
 
-    except requests.RequestException:
-        raise PolyApiException(error_msg="Request exception!")
-
-
-def post(endpoint, headers=None, data=None):
-    return request(endpoint, POST, headers, data)
-
-
-def get(endpoint, headers=None, data=None):
-    return request(endpoint, GET, headers, data)
+    except Exception as e:
+        raise PolyApiException(error_msg=f"Request exception: {str(e)}")
 
 
-def delete(endpoint, headers=None, data=None):
-    return request(endpoint, DELETE, headers, data)
+async def get(endpoint, headers=None):
+    return await request(endpoint, "GET", headers)
+
+
+async def post(endpoint, headers=None, data=None):
+    return await request(endpoint, "POST", headers, data)
+
+
+async def delete(endpoint, headers=None, data=None):
+    return await request(endpoint, "DELETE", headers, data)
 
 
 def build_query_params(url: str, param: str, val: str) -> str:
