@@ -47,6 +47,7 @@ from .endpoints import (
     GET_PRICES,
     GET_SPREAD,
     GET_SPREADS,
+    PRICES_HISTORY,
 )
 from .clob_types import (
     ApiCreds,
@@ -764,3 +765,38 @@ class AsyncClobClient:
             if book.bids is None:
                 raise Exception("no match")
             return self.builder.calculate_sell_market_price(book.bids, amount)
+        
+    async def get_prices_history(self, market: str, 
+                                start_ts: int | None = None,
+                                end_ts: int | None = None, 
+                                interval: str | None = None, 
+                                fidelity: int | None = None):
+        """
+        Get the price history for a given market token.
+        
+        Args:
+            market: The CLOB token id for which to fetch price history
+            start_ts: The start time, a unix timestamp in UTC
+            end_ts: The end time, a unix timestamp in UTC
+            interval: A string representing a duration ending at the current time
+            fidelity: The resolution of the data, in minutes
+            
+        Returns:
+            The price history data for the specified market token
+        """
+        params = {
+            'market': market
+        }
+        
+        if start_ts is not None:
+            params['startTs'] = str(start_ts)
+        if end_ts is not None:
+            params['endTs'] = str(end_ts)
+        if interval is not None:
+            params['interval'] = interval
+        if fidelity is not None:
+            params['fidelity'] = str(fidelity)
+        
+        query_params = "&".join([f"{k}={v}" for k, v in params.items()])
+        return await get("{}{}?{}".format(self.host, PRICES_HISTORY, query_params))
+
