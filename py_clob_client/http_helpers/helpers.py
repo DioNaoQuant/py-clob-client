@@ -1,6 +1,6 @@
 import requests
 import aiohttp
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Union
 
 from py_clob_client.clob_types import (
     DropNotificationParams,
@@ -34,37 +34,76 @@ def overloadHeaders(method: str, headers: dict) -> dict:
     return headers
 
 
-async def request(endpoint: str, method: str, headers=None, data=None):
+async def request(endpoint: str, method: str, headers=None, data=None, session=None):
+    """
+    发送HTTP请求
+    
+    Args:
+        endpoint: API端点URL
+        method: HTTP方法
+        headers: HTTP头信息
+        data: 请求数据
+        session: 可选的aiohttp会话对象，用于连接复用
+        
+    Returns:
+        响应数据，JSON或文本格式
+        
+    Raises:
+        PolyApiException: 当请求失败时抛出
+    """
     try:
         headers = overloadHeaders(method, headers)
         
-        # 使用aiohttp代替requests
-        async with aiohttp.ClientSession() as session:
+        # 使用传入的会话或创建新会话
+        if session:
+            # 使用已存在的会话
             async with session.request(
                 method=method, url=endpoint, headers=headers, json=data if data else None
             ) as resp:
                 if resp.status != 200:
+                    # 将完整响应对象传递给异常
                     raise PolyApiException(resp)
 
                 try:
                     return await resp.json()
                 except:
                     return await resp.text()
+        else:
+            # 兼容旧行为，创建新会话
+            async with aiohttp.ClientSession() as temp_session:
+                async with temp_session.request(
+                    method=method, url=endpoint, headers=headers, json=data if data else None
+                ) as resp:
+                    if resp.status != 200:
+                        # 将完整响应对象传递给异常
+                        raise PolyApiException(resp)
 
+                    try:
+                        return await resp.json()
+                    except:
+                        return await resp.text()
+
+    except PolyApiException:
+        # 保持异常不变
+        raise
     except Exception as e:
+        # 其他异常创建新的PolyApiException
         raise PolyApiException(error_msg=f"Request exception: {str(e)}")
 
 
-async def get(endpoint, headers=None):
-    return await request(endpoint, "GET", headers)
+async def get(endpoint, headers=None, session=None):
+    """发送GET请求，支持会话复用"""
+    return await request(endpoint, "GET", headers, session=session)
 
 
-async def post(endpoint, headers=None, data=None):
-    return await request(endpoint, "POST", headers, data)
+async def post(endpoint, headers=None, data=None, session=None):
+    """发送POST请求，支持会话复用"""
+    return await request(endpoint, "POST", headers, data, session=session)
 
 
-async def delete(endpoint, headers=None, data=None):
-    return await request(endpoint, "DELETE", headers, data)
+async def delete(endpoint, headers=None, data=None, session=None):
+    """发送DELETE请求，支持会话复用"""
+    return await request(endpoint, "DELETE", headers, data, session=session)
 
 
 def build_query_params(url: str, param: str, val: str) -> str:

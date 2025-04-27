@@ -1,5 +1,5 @@
 import logging
-from typing import Optional
+from typing import Optional, Dict, ClassVar
 import asyncio
 import aiohttp
 
@@ -90,6 +90,31 @@ from .utilities import (
 
 
 class AsyncClobClient:
+    # 单例存储 - 只保存一个实例
+    _instance = None
+    # 类级别锁，用于确保单例创建的线程安全
+    _lock = asyncio.Lock()
+    
+    @classmethod
+    async def get_instance(cls, host, chain_id=None, key=None, creds=None, signature_type=None, funder=None):
+        """获取客户端单例实例"""
+        async with cls._lock:
+            if cls._instance is None:
+                cls._instance = cls(
+                    host, chain_id, key, creds, signature_type, funder
+                )
+                # 确保创建好会话
+                await cls._instance._ensure_session()
+            return cls._instance
+    
+    @classmethod
+    async def close_instance(cls):
+        """关闭单例实例的会话资源"""
+        async with cls._lock:
+            if cls._instance and cls._instance._session and not cls._instance._session.closed:
+                await cls._instance._session.close()
+            cls._instance = None
+            
     def __init__(
         self,
         host,
@@ -130,12 +155,31 @@ class AsyncClobClient:
         
         # 添加会话对象用于优化连接复用
         self._session = None
+        # 添加会话锁以保护并发访问
+        self._session_lock = asyncio.Lock()
 
     async def _ensure_session(self):
-        """确保存在有效的会话"""
-        if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession()
-        return self._session
+        """确保存在有效的会话，使用异步锁保护并发访问"""
+        async with self._session_lock:
+            if self._session is None or self._session.closed:
+                # 创建会话时使用较高的连接限制和超时设置
+                conn = aiohttp.TCPConnector(
+                    limit=100,  # 最大同时连接数
+                    ttl_dns_cache=300,  # DNS缓存TTL
+                    enable_cleanup_closed=True  # 自动清理关闭的连接
+                )
+                timeout = aiohttp.ClientTimeout(
+                    total=10,      # 总超时
+                    connect=3,    # 连接超时
+                    sock_read=8,  # 读取超时
+                    sock_connect=3  # 套接字连接超时
+                )
+                self._session = aiohttp.ClientSession(
+                    connector=conn,
+                    timeout=timeout,
+                    headers={"User-Agent": "py_clob_client"}
+                )
+            return self._session
         
     async def __aenter__(self):
         await self._ensure_session()
@@ -180,14 +224,16 @@ class AsyncClobClient:
         Health check: Confirms that the server is up
         Does not need authentication
         """
-        return await get("{}/".format(self.host))
+        session = await self._ensure_session()
+        return await get("{}/".format(self.host), session=session)
 
     async def get_server_time(self):
         """
         Returns the current timestamp on the server
         Does not need authentication
         """
-        return await get("{}{}".format(self.host, TIME))
+        session = await self._ensure_session()
+        return await get("{}{}".format(self.host, TIME), session=session)
 
     async def create_api_key(self, nonce: int = None) -> ApiCreds:
         """
@@ -198,7 +244,8 @@ class AsyncClobClient:
         endpoint = "{}{}".format(self.host, CREATE_API_KEY)
         headers = create_level_1_headers(self.signer, nonce)
 
-        creds_raw = await post(endpoint, headers=headers)
+        session = await self._ensure_session()
+        creds_raw = await post(endpoint, headers=headers, session=session)
         try:
             creds = ApiCreds(
                 api_key=creds_raw["apiKey"],
@@ -219,7 +266,8 @@ class AsyncClobClient:
         endpoint = "{}{}".format(self.host, DERIVE_API_KEY)
         headers = create_level_1_headers(self.signer, nonce)
 
-        creds_raw = await get(endpoint, headers=headers)
+        session = await self._ensure_session()
+        creds_raw = await get(endpoint, headers=headers, session=session)
         try:
             creds = ApiCreds(
                 api_key=creds_raw["apiKey"],
@@ -256,7 +304,8 @@ class AsyncClobClient:
 
         request_args = RequestArgs(method="GET", request_path=GET_API_KEYS)
         headers = create_level_2_headers(self.signer, self.creds, request_args)
-        return await get("{}{}".format(self.host, GET_API_KEYS), headers=headers)
+        session = await self._ensure_session()
+        return await get("{}{}".format(self.host, GET_API_KEYS), headers=headers, session=session)
 
     async def get_closed_only_mode(self):
         """
@@ -267,7 +316,8 @@ class AsyncClobClient:
 
         request_args = RequestArgs(method="GET", request_path=CLOSED_ONLY)
         headers = create_level_2_headers(self.signer, self.creds, request_args)
-        return await get("{}{}".format(self.host, CLOSED_ONLY), headers=headers)
+        session = await self._ensure_session()
+        return await get("{}{}".format(self.host, CLOSED_ONLY), headers=headers, session=session)
 
     async def delete_api_key(self):
         """
@@ -278,52 +328,60 @@ class AsyncClobClient:
 
         request_args = RequestArgs(method="DELETE", request_path=DELETE_API_KEY)
         headers = create_level_2_headers(self.signer, self.creds, request_args)
-        return await delete("{}{}".format(self.host, DELETE_API_KEY), headers=headers)
+        session = await self._ensure_session()
+        return await delete("{}{}".format(self.host, DELETE_API_KEY), headers=headers, session=session)
 
     async def get_midpoint(self, token_id):
         """
         Get the mid market price for the given market
         """
-        return await get("{}{}?token_id={}".format(self.host, MID_POINT, token_id))
+        session = await self._ensure_session()
+        return await get("{}{}?token_id={}".format(self.host, MID_POINT, token_id), session=session)
 
     async def get_midpoints(self, params: list[BookParams]):
         """
         Get the mid market prices for a set of token ids
         """
         body = [{"token_id": param.token_id} for param in params]
-        return await post("{}{}".format(self.host, MID_POINTS), data=body)
+        session = await self._ensure_session()
+        return await post("{}{}".format(self.host, MID_POINTS), data=body, session=session)
 
     async def get_price(self, token_id, side):
         """
         Get the market price for the given market
         """
-        return await get("{}{}?token_id={}&side={}".format(self.host, PRICE, token_id, side))
+        session = await self._ensure_session()
+        return await get("{}{}?token_id={}&side={}".format(self.host, PRICE, token_id, side), session=session)
 
     async def get_prices(self, params: list[BookParams]):
         """
         Get the market prices for a set
         """
         body = [{"token_id": param.token_id, "side": param.side} for param in params]
-        return await post("{}{}".format(self.host, GET_PRICES), data=body)
+        session = await self._ensure_session()
+        return await post("{}{}".format(self.host, GET_PRICES), data=body, session=session)
 
     async def get_spread(self, token_id):
         """
         Get the spread for the given market
         """
-        return await get("{}{}?token_id={}".format(self.host, GET_SPREAD, token_id))
+        session = await self._ensure_session()
+        return await get("{}{}?token_id={}".format(self.host, GET_SPREAD, token_id), session=session)
 
     async def get_spreads(self, params: list[BookParams]):
         """
         Get the spreads for a set of token ids
         """
         body = [{"token_id": param.token_id} for param in params]
-        return await post("{}{}".format(self.host, GET_SPREADS), data=body)
+        session = await self._ensure_session()
+        return await post("{}{}".format(self.host, GET_SPREADS), data=body, session=session)
 
     async def get_tick_size(self, token_id: str) -> TickSize:
         if token_id in self.__tick_sizes:
             return self.__tick_sizes[token_id]
 
-        result = await get("{}{}?token_id={}".format(self.host, GET_TICK_SIZE, token_id))
+        session = await self._ensure_session()
+        result = await get("{}{}?token_id={}".format(self.host, GET_TICK_SIZE, token_id), session=session)
         self.__tick_sizes[token_id] = str(result["minimum_tick_size"])
 
         return self.__tick_sizes[token_id]
@@ -332,7 +390,8 @@ class AsyncClobClient:
         if token_id in self.__neg_risk:
             return self.__neg_risk[token_id]
 
-        result = await get("{}{}?token_id={}".format(self.host, GET_NEG_RISK, token_id))
+        session = await self._ensure_session()
+        result = await get("{}{}?token_id={}".format(self.host, GET_NEG_RISK, token_id), session=session)
         self.__neg_risk[token_id] = result["neg_risk"]
 
         return result["neg_risk"]
@@ -449,7 +508,8 @@ class AsyncClobClient:
             self.creds,
             RequestArgs(method="POST", request_path=POST_ORDER, body=body),
         )
-        return await post("{}{}".format(self.host, POST_ORDER), headers=headers, data=body)
+        session = await self._ensure_session()
+        return await post("{}{}".format(self.host, POST_ORDER), headers=headers, data=body, session=session)
 
     async def create_and_post_order(
         self, order_args: OrderArgs, options: PartialCreateOrderOptions = None
@@ -470,7 +530,8 @@ class AsyncClobClient:
 
         request_args = RequestArgs(method="DELETE", request_path=CANCEL, body=body)
         headers = create_level_2_headers(self.signer, self.creds, request_args)
-        return await delete("{}{}".format(self.host, CANCEL), headers=headers, data=body)
+        session = await self._ensure_session()
+        return await delete("{}{}".format(self.host, CANCEL), headers=headers, data=body, session=session)
 
     async def cancel_orders(self, order_ids):
         """
@@ -484,8 +545,9 @@ class AsyncClobClient:
             method="DELETE", request_path=CANCEL_ORDERS, body=body
         )
         headers = create_level_2_headers(self.signer, self.creds, request_args)
+        session = await self._ensure_session()
         return await delete(
-            "{}{}".format(self.host, CANCEL_ORDERS), headers=headers, data=body
+            "{}{}".format(self.host, CANCEL_ORDERS), headers=headers, data=body, session=session
         )
 
     async def cancel_all(self):
@@ -496,7 +558,8 @@ class AsyncClobClient:
         self.assert_level_2_auth()
         request_args = RequestArgs(method="DELETE", request_path=CANCEL_ALL)
         headers = create_level_2_headers(self.signer, self.creds, request_args)
-        return await delete("{}{}".format(self.host, CANCEL_ALL), headers=headers)
+        session = await self._ensure_session()
+        return await delete("{}{}".format(self.host, CANCEL_ALL), headers=headers, session=session)
 
     async def cancel_market_orders(self, market: str = "", asset_id: str = ""):
         """
@@ -510,8 +573,9 @@ class AsyncClobClient:
             method="DELETE", request_path=CANCEL_MARKET_ORDERS, body=body
         )
         headers = create_level_2_headers(self.signer, self.creds, request_args)
+        session = await self._ensure_session()
         return await delete(
-            "{}{}".format(self.host, CANCEL_MARKET_ORDERS), headers=headers, data=body
+            "{}{}".format(self.host, CANCEL_MARKET_ORDERS), headers=headers, data=body, session=session
         )
 
     async def get_orders(self, params: OpenOrderParams = None, next_cursor="MA=="):
@@ -525,11 +589,12 @@ class AsyncClobClient:
 
         results = []
         next_cursor = next_cursor if next_cursor is not None else "MA=="
+        session = await self._ensure_session()
         while next_cursor != END_CURSOR:
             url = add_query_open_orders_params(
                 "{}{}".format(self.host, ORDERS), params, next_cursor
             )
-            response = await get(url, headers=headers)
+            response = await get(url, headers=headers, session=session)
             next_cursor = response["next_cursor"]
             results += response["data"]
 
@@ -539,7 +604,8 @@ class AsyncClobClient:
         """
         Fetches the orderbook for the token_id
         """
-        raw_obs = await get("{}{}?token_id={}".format(self.host, GET_ORDER_BOOK, token_id))
+        session = await self._ensure_session()
+        raw_obs = await get("{}{}?token_id={}".format(self.host, GET_ORDER_BOOK, token_id), session=session)
         return parse_raw_orderbook_summary(raw_obs)
 
     async def get_order_books(self, params: list[BookParams]) -> list[OrderBookSummary]:
@@ -547,7 +613,8 @@ class AsyncClobClient:
         Fetches the orderbook for a set of token ids
         """
         body = [{"token_id": param.token_id} for param in params]
-        raw_obs = await post("{}{}".format(self.host, GET_ORDER_BOOKS), data=body)
+        session = await self._ensure_session()
+        raw_obs = await post("{}{}".format(self.host, GET_ORDER_BOOKS), data=body, session=session)
         return [parse_raw_orderbook_summary(r) for r in raw_obs]
 
     def get_order_book_hash(self, orderbook: OrderBookSummary) -> str:
@@ -565,7 +632,8 @@ class AsyncClobClient:
         endpoint = "{}{}".format(GET_ORDER, order_id)
         request_args = RequestArgs(method="GET", request_path=endpoint)
         headers = create_level_2_headers(self.signer, self.creds, request_args)
-        return await get("{}{}".format(self.host, endpoint), headers=headers)
+        session = await self._ensure_session()
+        return await get("{}{}".format(self.host, endpoint), headers=headers, session=session)
 
     async def get_trades(self, params: TradeParams = None, next_cursor="MA=="):
         """
@@ -578,11 +646,12 @@ class AsyncClobClient:
 
         results = []
         next_cursor = next_cursor if next_cursor is not None else "MA=="
+        session = await self._ensure_session()
         while next_cursor != END_CURSOR:
             url = add_query_trade_params(
                 "{}{}".format(self.host, TRADES), params, next_cursor
             )
-            response = await get(url, headers=headers)
+            response = await get(url, headers=headers, session=session)
             next_cursor = response["next_cursor"]
             results += response["data"]
 
@@ -592,14 +661,16 @@ class AsyncClobClient:
         """
         Fetches the last trade price token_id
         """
-        return await get("{}{}?token_id={}".format(self.host, GET_LAST_TRADE_PRICE, token_id))
+        session = await self._ensure_session()
+        return await get("{}{}?token_id={}".format(self.host, GET_LAST_TRADE_PRICE, token_id), session=session)
 
     async def get_last_trades_prices(self, params: list[BookParams]):
         """
         Fetches the last trades prices for a set of token ids
         """
         body = [{"token_id": param.token_id} for param in params]
-        return await post("{}{}".format(self.host, GET_LAST_TRADES_PRICES), data=body)
+        session = await self._ensure_session()
+        return await post("{}{}".format(self.host, GET_LAST_TRADES_PRICES), data=body, session=session)
 
     def assert_level_1_auth(self):
         """
@@ -633,7 +704,8 @@ class AsyncClobClient:
         url = "{}{}?signature_type={}".format(
             self.host, GET_NOTIFICATIONS, self.builder.sig_type
         )
-        return await get(url, headers=headers)
+        session = await self._ensure_session()
+        return await get(url, headers=headers, session=session)
 
     async def drop_notifications(self, params: DropNotificationParams = None):
         """
@@ -646,7 +718,8 @@ class AsyncClobClient:
         url = drop_notifications_query_params(
             "{}{}".format(self.host, DROP_NOTIFICATIONS), params
         )
-        return await delete(url, headers=headers)
+        session = await self._ensure_session()
+        return await delete(url, headers=headers, session=session)
 
     async def get_balance_allowance(self, params: BalanceAllowanceParams = None):
         """
@@ -661,7 +734,8 @@ class AsyncClobClient:
         url = add_balance_allowance_params_to_url(
             "{}{}".format(self.host, GET_BALANCE_ALLOWANCE), params
         )
-        return await get(url, headers=headers)
+        session = await self._ensure_session()
+        return await get(url, headers=headers, session=session)
 
     async def update_balance_allowance(self, params: BalanceAllowanceParams = None):
         """
@@ -676,7 +750,8 @@ class AsyncClobClient:
         url = add_balance_allowance_params_to_url(
             "{}{}".format(self.host, UPDATE_BALANCE_ALLOWANCE), params
         )
-        return await get(url, headers=headers)
+        session = await self._ensure_session()
+        return await get(url, headers=headers, session=session)
 
     async def is_order_scoring(self, params: OrderScoringParams):
         """
@@ -689,7 +764,8 @@ class AsyncClobClient:
         url = add_order_scoring_params_to_url(
             "{}{}".format(self.host, IS_ORDER_SCORING), params
         )
-        return await get(url, headers=headers)
+        session = await self._ensure_session()
+        return await get(url, headers=headers, session=session)
 
     async def are_orders_scoring(self, params: OrdersScoringParams):
         """
@@ -702,53 +778,60 @@ class AsyncClobClient:
             method="POST", request_path=ARE_ORDERS_SCORING, body=body
         )
         headers = create_level_2_headers(self.signer, self.creds, request_args)
+        session = await self._ensure_session()
         return await post(
-            "{}{}".format(self.host, ARE_ORDERS_SCORING), headers=headers, data=body
+            "{}{}".format(self.host, ARE_ORDERS_SCORING), headers=headers, data=body, session=session
         )
 
     async def get_sampling_markets(self, next_cursor="MA=="):
         """
         Get the current sampling markets
         """
+        session = await self._ensure_session()
         return await get(
-            "{}{}?next_cursor={}".format(self.host, GET_SAMPLING_MARKETS, next_cursor)
+            "{}{}?next_cursor={}".format(self.host, GET_SAMPLING_MARKETS, next_cursor), session=session
         )
 
     async def get_sampling_simplified_markets(self, next_cursor="MA=="):
         """
         Get the current sampling simplified markets
         """
+        session = await self._ensure_session()
         return await get(
             "{}{}?next_cursor={}".format(
                 self.host, GET_SAMPLING_SIMPLIFIED_MARKETS, next_cursor
-            )
+            ), session=session
         )
 
     async def get_markets(self, next_cursor="MA=="):
         """
         Get the current markets
         """
-        return await get("{}{}?next_cursor={}".format(self.host, GET_MARKETS, next_cursor))
+        session = await self._ensure_session()
+        return await get("{}{}?next_cursor={}".format(self.host, GET_MARKETS, next_cursor), session=session)
 
     async def get_simplified_markets(self, next_cursor="MA=="):
         """
         Get the current simplified markets
         """
+        session = await self._ensure_session()
         return await get(
-            "{}{}?next_cursor={}".format(self.host, GET_SIMPLIFIED_MARKETS, next_cursor)
+            "{}{}?next_cursor={}".format(self.host, GET_SIMPLIFIED_MARKETS, next_cursor), session=session
         )
 
     async def get_market(self, condition_id):
         """
         Get a market by condition_id
         """
-        return await get("{}{}{}".format(self.host, GET_MARKET, condition_id))
+        session = await self._ensure_session()
+        return await get("{}{}{}".format(self.host, GET_MARKET, condition_id), session=session)
 
     async def get_market_trades_events(self, condition_id):
         """
         Get the market's trades events by condition id
         """
-        return await get("{}{}{}".format(self.host, GET_MARKET_TRADES_EVENTS, condition_id))
+        session = await self._ensure_session()
+        return await get("{}{}{}".format(self.host, GET_MARKET_TRADES_EVENTS, condition_id), session=session)
 
     async def calculate_market_price(self, token_id: str, side: str, amount: float) -> float:
         """
@@ -798,5 +881,13 @@ class AsyncClobClient:
             params['fidelity'] = str(fidelity)
         
         query_params = "&".join([f"{k}={v}" for k, v in params.items()])
-        return await get("{}{}?{}".format(self.host, PRICES_HISTORY, query_params))
+        session = await self._ensure_session()
+        return await get("{}{}?{}".format(self.host, PRICES_HISTORY, query_params), session=session)
+
+    async def close(self):
+        """关闭当前实例的会话资源"""
+        async with self._session_lock:
+            if self._session and not self._session.closed:
+                await self._session.close()
+                self._session = None
 
