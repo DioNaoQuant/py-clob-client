@@ -34,61 +34,44 @@ def overloadHeaders(method: str, headers: dict) -> dict:
     return headers
 
 
-async def request(endpoint: str, method: str, headers=None, data=None, session=None):
+async def _read_error(resp: aiohttp.ClientResponse) -> str:
     """
-    发送HTTP请求
-    
-    Args:
-        endpoint: API端点URL
-        method: HTTP方法
-        headers: HTTP头信息
-        data: 请求数据
-        session: 可选的aiohttp会话对象，用于连接复用
-        
-    Returns:
-        响应数据，JSON或文本格式
-        
-    Raises:
-        PolyApiException: 当请求失败时抛出
+    尝试优先解析 JSON，其次获取纯文本；都失败就退回 reason/status
     """
     try:
-        headers = overloadHeaders(method, headers)
-        
-        # 使用传入的会话或创建新会话
-        if session:
-            # 使用已存在的会话
-            async with session.request(
-                method=method, url=endpoint, headers=headers, json=data if data else None
-            ) as resp:
-                if resp.status != 200:
-                    # 将完整响应对象传递给异常
-                    raise PolyApiException(resp)
+        return await resp.json()          # 已是 dict/str，可自行 str() 处理
+    except aiohttp.ContentTypeError:
+        try:
+            return await resp.text()
+        except Exception:
+            return resp.reason or f"HTTP Error: {resp.status}"
 
-                try:
-                    return await resp.json()
-                except:
-                    return await resp.text()
-        else:
-            # 兼容旧行为，创建新会话
-            async with aiohttp.ClientSession() as temp_session:
-                async with temp_session.request(
-                    method=method, url=endpoint, headers=headers, json=data if data else None
-                ) as resp:
-                    if resp.status != 200:
-                        # 将完整响应对象传递给异常
-                        raise PolyApiException(resp)
+async def request(endpoint: str, method: str,
+                  headers=None, data=None, session: aiohttp.ClientSession | None = None):
+    headers = overloadHeaders(method, headers)
 
-                    try:
-                        return await resp.json()
-                    except:
-                        return await resp.text()
+    own_session = False
+    if session is None:                   # 兼容旧调用
+        session = aiohttp.ClientSession()
+        own_session = True
 
-    except PolyApiException:
-        # 保持异常不变
-        raise
-    except Exception as e:
-        # 其他异常创建新的PolyApiException
-        raise PolyApiException(error_msg=f"Request exception: {str(e)}")
+    try:
+        async with session.request(method, endpoint,
+                                   headers=headers,
+                                   json=data if data else None) as resp:
+
+            if resp.status != 200:
+                err_msg = await _read_error(resp)
+                raise PolyApiException(resp, err_msg)   # 同时保留 resp 和 msg
+
+            try:
+                return await resp.json()
+            except aiohttp.ContentTypeError:
+                return await resp.text()
+    finally:
+        if own_session:                   # 仅当内部创建时才关闭
+            await session.close()
+
 
 
 async def get(endpoint, headers=None, session=None):
