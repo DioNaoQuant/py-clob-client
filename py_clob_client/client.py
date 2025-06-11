@@ -24,6 +24,7 @@ from .endpoints import (
     MID_POINT,
     ORDERS,
     POST_ORDER,
+    POST_ORDERS,
     PRICE,
     TIME,
     TRADES,
@@ -54,6 +55,7 @@ from .clob_types import (
     TradeParams,
     OpenOrderParams,
     OrderArgs,
+    PostOrdersArgs,
     RequestArgs,
     DropNotificationParams,
     OrderBookSummary,
@@ -510,6 +512,21 @@ class AsyncClobClient:
         )
         session = await self._ensure_session()
         return await post("{}{}".format(self.host, POST_ORDER), headers=headers, data=body, session=session)
+    
+    async def post_orders(self, args: list[PostOrdersArgs]):
+        """
+        Posts a list of orders
+        """
+        self.assert_level_2_auth()
+        body = [order_to_json(arg.order, self.creds.api_key, arg.orderType) for arg in args]
+        headers = create_level_2_headers(
+            self.signer,
+            self.creds,
+            RequestArgs(method="POST", request_path=POST_ORDERS, body=body),
+        )
+        session = await self._ensure_session()
+        return await post("{}{}".format(self.host, POST_ORDERS), headers=headers, data=body, session=session)
+
 
     async def create_and_post_order(
         self, order_args: OrderArgs, options: PartialCreateOrderOptions = None

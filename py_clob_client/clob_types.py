@@ -4,6 +4,10 @@ from json import dumps
 from typing import Literal, Optional
 from enum import Enum
 
+from py_order_utils.model import (
+    SignedOrder,
+)
+
 from .constants import ZERO_ADDRESS
 
 
@@ -233,3 +237,7 @@ class ContractConfig:
     """
     The ERC1155 conditional tokens contract
     """
+@dataclass
+class PostOrdersArgs:
+    order: SignedOrder
+    orderType: OrderType = OrderType.GTC
