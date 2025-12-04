@@ -73,9 +73,9 @@ from .exceptions import PolyException
 from .http_helpers.helpers import (
     add_query_trade_params,
     add_query_open_orders_params,
-    delete,
-    get,
-    post,
+    delete as _origin_delete, 
+    get as _origin_get,
+    post as _origin_post,
     drop_notifications_query_params,
     add_balance_allowance_params_to_url,
     add_order_scoring_params_to_url,
@@ -89,6 +89,25 @@ from .utilities import (
     is_tick_size_smaller,
     price_valid,
 )
+
+# 2. 定义包装函数，统一拦截超时异常
+async def get(*args, **kwargs):
+    try:
+        return await _origin_get(*args, **kwargs)
+    except asyncio.TimeoutError:
+        raise PolyException("Clob Timeout: Get Request timed out (sock_read > 3.5s)")
+
+async def post(*args, **kwargs):
+    try:
+        return await _origin_post(*args, **kwargs)
+    except asyncio.TimeoutError:
+        raise PolyException("Clob Timeout: Post Request timed out (sock_read > 3.5s)")
+
+async def delete(*args, **kwargs):
+    try:
+        return await _origin_delete(*args, **kwargs)
+    except asyncio.TimeoutError:
+        raise PolyException("Clob Timeout: Delete Request timed out (sock_read > 3.5s)")
 
 
 class AsyncClobClient:
@@ -166,15 +185,15 @@ class AsyncClobClient:
             if self._session is None or self._session.closed:
                 # 创建会话时使用较高的连接限制和超时设置
                 conn = aiohttp.TCPConnector(
-                    limit=100,  # 最大同时连接数
+                    limit=1000,  # 最大同时连接数
                     ttl_dns_cache=300,  # DNS缓存TTL
                     enable_cleanup_closed=True  # 自动清理关闭的连接
                 )
                 timeout = aiohttp.ClientTimeout(
-                    total=10,      # 总超时
-                    connect=3,    # 连接超时
-                    sock_read=8,  # 读取超时
-                    sock_connect=3  # 套接字连接超时
+                    total=8,      # 总超时
+                    connect=2,    # 连接超时
+                    sock_read=3.5,  # 读取超时
+                    sock_connect=2  # 套接字连接超时
                 )
                 self._session = aiohttp.ClientSession(
                     connector=conn,
