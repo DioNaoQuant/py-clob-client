@@ -48,6 +48,7 @@ from .endpoints import (
     GET_PRICES,
     GET_SPREAD,
     GET_SPREADS,
+    GET_FEE_RATE,
     PRICES_HISTORY,
 )
 from .clob_types import (
@@ -152,6 +153,7 @@ class AsyncClobClient:
         # local cache
         self.__tick_sizes = {}
         self.__neg_risk = {}
+        self.__fee_rates = {}
 
         self.logger = logging.getLogger(self.__class__.__name__)
         
@@ -388,6 +390,17 @@ class AsyncClobClient:
 
         return self.__tick_sizes[token_id]
 
+    # 获取市场的手续费率(暂时不需要，后续可能需要)
+    async def get_fee_rate_bps(self, token_id: str) -> int:
+        if token_id in self.__fee_rates:
+            return self.__fee_rates[token_id]
+
+        session = await self._ensure_session()
+        result = await get("{}{}?token_id={}".format(self.host, GET_FEE_RATE, token_id), session=session)
+        fee_rate = result.get("base_fee") or 0
+        self.__fee_rates[token_id] = fee_rate
+        return fee_rate
+
     async def get_neg_risk(self, token_id: str) -> bool:
         if token_id in self.__neg_risk:
             return self.__neg_risk[token_id]
@@ -414,6 +427,18 @@ class AsyncClobClient:
             tick_size = min_tick_size
         return tick_size
 
+    async def __resolve_fee_rate(self, token_id: str, user_fee_rate: int = None) -> int:
+        market_fee_rate_bps = await self.get_fee_rate_bps(token_id)
+        if (
+            market_fee_rate_bps > 0 
+            and user_fee_rate is not None 
+            and user_fee_rate > 0 
+            and user_fee_rate != market_fee_rate_bps
+        ):
+            raise Exception(f"Fee rate mismatch: market requires {market_fee_rate_bps}")
+        return market_fee_rate_bps
+
+
     async def create_order(
         self, order_args: OrderArgs, options: Optional[PartialCreateOrderOptions] = None
     ):
@@ -422,6 +447,14 @@ class AsyncClobClient:
         Level 1 Auth required
         """
         self.assert_level_1_auth()
+
+        #order_args.fee_rate_bps = await self.__resolve_fee_rate(
+        #     order_args.token_id,
+        #     order_args.fee_rate_bps,
+        # )
+
+        # 这里不需要获取市场的手续费率，因为订单的手续费率是固定值
+
 
         # add resolve_order_options, or similar
         tick_size = await self.__resolve_tick_size(
