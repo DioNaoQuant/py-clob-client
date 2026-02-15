@@ -50,6 +50,15 @@ async def request(endpoint: str, method: str,
                   headers=None, data=None, session: aiohttp.ClientSession | None = None):
     headers = overloadHeaders(method, headers)
 
+    is_str=isinstance(data, str)
+    request_kwargs = {}
+
+    if data:
+        if is_str:
+            request_kwargs["data"] = data
+        else:
+            request_kwargs["json"] = data
+
     own_session = False
     if session is None:                   # 兼容旧调用
         session = aiohttp.ClientSession()
@@ -58,7 +67,7 @@ async def request(endpoint: str, method: str,
     try:
         async with session.request(method, endpoint,
                                    headers=headers,
-                                   json=data if data else None) as resp:
+                                   **request_kwargs) as resp:
 
             if resp.status != 200:
                 err_msg = await _read_error(resp)

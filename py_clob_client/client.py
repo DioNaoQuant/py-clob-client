@@ -2,6 +2,7 @@ import logging
 from typing import Optional, Dict, ClassVar
 import asyncio
 import aiohttp
+import json
 
 from .order_builder.builder import OrderBuilder
 from .headers.headers import create_level_1_headers, create_level_2_headers
@@ -441,7 +442,7 @@ class AsyncClobClient:
 
     async def create_order(
         self, order_args: OrderArgs, options: Optional[PartialCreateOrderOptions] = None
-    ):
+        ):
         """
         Creates and signs an order
         Level 1 Auth required
@@ -497,6 +498,11 @@ class AsyncClobClient:
         """
         self.assert_level_1_auth()
 
+        #order_args.fee_rate_bps = await self.__resolve_fee_rate(
+        #     order_args.token_id,
+        #     order_args.fee_rate_bps,
+        # )
+
         # add resolve_order_options, or similar
         tick_size = await self.__resolve_tick_size(
             order_args.token_id,
@@ -532,34 +538,44 @@ class AsyncClobClient:
             ),
         )
 
-    async def post_order(self, order, orderType: OrderType = OrderType.GTC):
+    async def post_order(self, order, orderType: OrderType = OrderType.GTC , post_only: bool = False):
         """
         Posts the order
         """
         self.assert_level_2_auth()
-        body = order_to_json(order, self.creds.api_key, orderType)
+        body = order_to_json(order, self.creds.api_key, orderType, post_only)
+        if post_only:
+            body = json.dumps(body, separators=(",", ":"), ensure_ascii=False)
         headers = create_level_2_headers(
             self.signer,
             self.creds,
             RequestArgs(method="POST", request_path=POST_ORDER, body=body),
         )
+
         session = await self._ensure_session()
         return await post("{}{}".format(self.host, POST_ORDER), headers=headers, data=body, session=session)
     
     async def post_orders(self, args: list[PostOrdersArgs]):
-        """
-        Posts a list of orders
-        """
         self.assert_level_2_auth()
-        body = [order_to_json(arg.order, self.creds.api_key, arg.orderType) for arg in args]
+        
+
+        body = [
+            order_to_json(arg.order, self.creds.api_key, arg.orderType, arg.postOnly) 
+            for arg in args
+        ]
+        any_post_only = any(arg.postOnly for arg in args)
+        
+        if any_post_only:
+            body = json.dumps(body, separators=(",", ":"), ensure_ascii=False)
+            
         headers = create_level_2_headers(
             self.signer,
             self.creds,
             RequestArgs(method="POST", request_path=POST_ORDERS, body=body),
         )
+        
         session = await self._ensure_session()
         return await post("{}{}".format(self.host, POST_ORDERS), headers=headers, data=body, session=session)
-
 
     async def create_and_post_order(
         self, order_args: OrderArgs, options: PartialCreateOrderOptions = None
