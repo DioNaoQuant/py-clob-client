@@ -538,13 +538,13 @@ class AsyncClobClient:
             ),
         )
 
-    async def post_order(self, order, orderType: OrderType = OrderType.GTC , post_only: bool = False):
+    async def post_order(self, order, orderType: OrderType = OrderType.GTC , postOnly: bool = False):
         """
         Posts the order
         """
         self.assert_level_2_auth()
-        body = order_to_json(order, self.creds.api_key, orderType, post_only)
-        if post_only:
+        body = order_to_json(order, self.creds.api_key, orderType, postOnly)
+        if postOnly:
             body = json.dumps(body, separators=(",", ":"), ensure_ascii=False)
         headers = create_level_2_headers(
             self.signer,

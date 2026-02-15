@@ -32,7 +32,7 @@ def generate_orderbook_summary_hash(orderbook: OrderBookSummary) -> str:
 
 
 # #修改为允许枚举类型，防止类型警告
-def order_to_json(order, owner, orderType, post_only: bool = False) -> dict:
+def order_to_json(order, owner, orderType, postOnly: bool = False) -> dict:
     body = {
         "order": order.dict(),
         "owner": owner,
@@ -40,7 +40,7 @@ def order_to_json(order, owner, orderType, post_only: bool = False) -> dict:
     }
     
     # 只有当 post_only 为 True 时，才动态添加该字段,为了独立兼容旧版本
-    if post_only:
+    if postOnly:
         body["postOnly"] = True
         
     return body
